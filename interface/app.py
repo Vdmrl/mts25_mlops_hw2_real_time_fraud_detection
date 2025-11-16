@@ -5,12 +5,21 @@ import json
 import time
 import os
 import uuid
+import psycopg
+import matplotlib.pyplot as plt
 
 # Конфигурация Kafka
 KAFKA_CONFIG = {
     "bootstrap_servers": os.getenv("KAFKA_BROKERS", "kafka:9092"),
-    "topic": os.getenv("KAFKA_TOPIC", "transactions")
+    "topic_transaction": os.getenv("KAFKA_TRANSACTIONS_TOPIC", "transactions")
 }
+
+# Для упращения запуска не буду использовать .env
+HOST="postgres"
+DBNAME="dbdb"
+DBUSER="dbuser"
+DBPASS="dbpass"
+
 
 def load_file(uploaded_file):
     """Загрузка CSV файла в DataFrame"""
@@ -20,7 +29,7 @@ def load_file(uploaded_file):
         st.error(f"Ошибка загрузки файла: {str(e)}")
         return None
 
-def send_to_kafka(df, topic, bootstrap_servers):
+def send_to_kafka(df, topic, bootstrap_servers) -> list[str]:
     """Отправка данных в Kafka с уникальным ID транзакции"""
     try:
         producer = KafkaProducer(
@@ -28,7 +37,7 @@ def send_to_kafka(df, topic, bootstrap_servers):
             value_serializer=lambda v: json.dumps(v).encode("utf-8"),
             security_protocol="PLAINTEXT"
         )
-        
+
         # Генерация уникальных ID для всех транзакций
         df['transaction_id'] = [str(uuid.uuid4()) for _ in range(len(df))]
         
@@ -45,14 +54,56 @@ def send_to_kafka(df, topic, bootstrap_servers):
                 }
             )
             progress_bar.progress((idx + 1) / total_rows)
-            time.sleep(0.01)
-            
+
         producer.flush()
      
         return True
     except Exception as e:
         st.error(f"Ошибка отправки данных: {str(e)}")
         return False
+
+
+def get_connection(max_attempts=10, delay=2):
+    for attempt in range(max_attempts):
+        try:
+            return psycopg.connect(
+                host=os.getenv("POSTGRES_HOST", HOST),
+                dbname=os.getenv("POSTGRES_DB", DBNAME),
+                user=os.getenv("POSTGRES_USER", DBUSER),
+                password=os.getenv("POSTGRES_PASSWORD", DBPASS),
+                connect_timeout=5
+            )
+        except Exception as e:
+            if attempt == max_attempts - 1:
+                st.error(f"Не удалось подключиться к БД после {max_attempts} попыток")
+                st.error(f"Ошибка: {str(e)}")
+                st.stop()
+
+            st.warning(f"Попытка {attempt + 1}/{max_attempts} подключения к бд")
+            time.sleep(delay)
+
+def get_fraud_transactions():
+    """Получает 10 последних мошеннических транзакций"""
+    with get_connection().cursor() as cur:
+        cur.execute("""
+            SELECT transaction_id, score, fraud_flag 
+            FROM transaction_scores 
+            WHERE fraud_flag = TRUE
+            ORDER BY processed_at DESC
+            LIMIT 10
+        """)
+        return cur.fetchall()
+
+def get_scores_for_histogram():
+    """Получает скоры последних 100 транзакций"""
+    with get_connection().cursor() as cur:
+        cur.execute("""
+            SELECT score 
+            FROM transaction_scores 
+            ORDER BY processed_at DESC
+            LIMIT 100
+        """)
+        return [row[0] for row in cur.fetchall()]
 
 # Инициализация состояния
 if "uploaded_files" not in st.session_state:
@@ -92,7 +143,7 @@ if st.session_state.uploaded_files:
                     with st.spinner("Отправка..."):
                         success = send_to_kafka(
                             file_data["df"],
-                            KAFKA_CONFIG["topic"],
+                            KAFKA_CONFIG["topic_transaction"],
                             KAFKA_CONFIG["bootstrap_servers"]
                         )
                         if success:
@@ -100,3 +151,27 @@ if st.session_state.uploaded_files:
                             st.rerun()
                 else:
                     st.error("Файл не содержит данных")
+
+if st.button("Посмотреть результаты"):
+
+    # 1. 10 последних мошеннических записей/транзакций
+    fraud_data = get_fraud_transactions()
+    if fraud_data:
+        st.subheader("Последние мошеннические транзакции")
+        fraud_df = pd.DataFrame(fraud_data, columns=["ID", "Score", "Fraud"])
+        st.dataframe(fraud_df)
+    else:
+        st.info("Нет транзакций с флагом мошенничества")
+
+    # 2. Гистограмма скоров
+    scores = get_scores_for_histogram()
+    if scores:
+        st.subheader("Распределение скоров")
+        fig, ax = plt.subplots()
+        ax.hist(scores, bins=10, range=(0, 1), color='skyblue', edgecolor='black')
+        ax.set_xlabel('Score')
+        ax.set_ylabel('Количество')
+        ax.set_title('Распределение скоров последних транзакций')
+        st.pyplot(fig)
+    else:
+        st.info("Нет данных для построения гистограммы")

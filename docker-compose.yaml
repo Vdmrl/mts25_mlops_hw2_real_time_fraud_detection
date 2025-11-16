@@ -18,6 +18,7 @@ services:
     networks:
       - ml-scorer
     ports:
+      - "9092:9092"
       - "9095:9095"
     environment:
       KAFKA_BROKER_ID: 1
@@ -72,6 +73,25 @@ services:
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
       KAFKA_CLUSTERS_0_ZOOKEEPER: zookeeper:2181
 
+  postgres:
+    image: postgres:16
+    networks:
+      - ml-scorer
+    environment:
+      # для простоты запуска не буду использовать .env
+      POSTGRES_HOST: "postgres"
+      POSTGRES_USER: "dbuser"
+      POSTGRES_PASSWORD: "dbpass"
+      POSTGRES_DB: "dbdb"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U dbuser -d dbdb" ]
+      interval: 30s
+      timeout: 60s
+      retries: 5
+      start_period: 80s
+
   fraud_detector:
     build: ./fraud_detector
     networks:
@@ -83,20 +103,50 @@ services:
     depends_on:
       - kafka
       - kafka-setup
+      - postgres
 
   interface:
-    build: ./interface
+    build: interface
     networks:
       - ml-scorer
     environment:
       KAFKA_BROKERS: "kafka:9092"  # Используем внутренний адрес Kafka
-      KAFKA_TOPIC: "transactions"
+      KAFKA_TRANSACTIONS_TOPIC: "transactions"
+      POSTGRES_HOST: "postgres"
+      POSTGRES_DB: "dbdb"
+      POSTGRES_USER: "dbuser"
+      POSTGRES_PASSWORD: "dbpass"
     depends_on:
       - kafka
+      - kafka-setup
+      - postgres
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "8501:8501"
+    volumes:
+      - ./interface:/app
+
+  score_ingester:
+    build: ./score_ingester
+    networks:
+      - ml-scorer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
+      KAFKA_SCORING_TOPIC: "scoring"
+      POSTGRES_HOST: "postgres"
+      POSTGRES_DB: "dbdb"
+      POSTGRES_USER: "dbuser"
+      POSTGRES_PASSWORD: "dbpass"
+    depends_on:
+      - kafka
+      - kafka-setup
+      - postgres
 
 networks:
   ml-scorer:
     name: ml-scorer
     driver: bridge
+
+volumes:
+  postgres_data:

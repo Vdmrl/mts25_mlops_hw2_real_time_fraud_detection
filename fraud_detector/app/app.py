@@ -36,12 +36,12 @@ class ProcessingService:
             'auto.offset.reset': 'earliest'
         }
         self.producer_config = {
-             'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS
-             }
+            'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS
+        }
         self.consumer = Consumer(self.consumer_config)
         self.consumer.subscribe([TRANSACTIONS_TOPIC])
         self.producer = Producer(self.producer_config)
-        
+
         # Загрузка данных для препроцессинга
         self.train = load_train_data()
 

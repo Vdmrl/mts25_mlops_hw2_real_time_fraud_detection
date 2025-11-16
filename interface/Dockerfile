@@ -3,7 +3,9 @@ FROM python:3.9-slim
 WORKDIR /app
 
 # Создаем директорию для конфига
-RUN mkdir -p /root/.streamlit
+RUN mkdir -p /root/.streamlit && \
+    mkdir -p /app/logs
+
 
 # Копируем конфигурационный файл
 COPY .streamlit/config.toml /root/.streamlit/config.toml
